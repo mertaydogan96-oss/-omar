@@ -17,6 +17,7 @@ import os
 import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import tkinter.simpledialog as simpledialog
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from datetime import date, datetime
@@ -294,8 +295,68 @@ class PersistenceManager:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seferler (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ad TEXT NOT NULL,
+                durum TEXT DEFAULT 'aktif',
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kalemler (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sefer_id INTEGER NOT NULL,
+                sira INTEGER NOT NULL,
+                belge_no TEXT,
+                fatura_no TEXT,
+                fatura_tarihi TEXT,
+                deger TEXT,
+                miktar TEXT,
+                tanim TEXT,
+                urun_grubu TEXT,
+                balya_sayisi TEXT,
+                brut_kg TEXT DEFAULT '',
+                navlun TEXT DEFAULT '',
+                sigorta TEXT DEFAULT '',
+                ilave_yurtdisi TEXT DEFAULT '',
+                excel_secili INTEGER DEFAULT 0,
+                belge_secili INTEGER DEFAULT 0,
+                belge_0101_ref TEXT DEFAULT '',
+                belge_0101_tarih TEXT DEFAULT '',
+                belge_0102_ref TEXT DEFAULT '',
+                belge_0102_tarih TEXT DEFAULT '',
+                belge_0979_ref TEXT DEFAULT '',
+                belge_0979_tarih TEXT DEFAULT '',
+                belge_0903_ref TEXT DEFAULT '',
+                belge_0903_tarih TEXT DEFAULT '',
+                belge_0877_ref TEXT DEFAULT '',
+                belge_0877_tarih TEXT DEFAULT '',
+                durum TEXT DEFAULT 'bekliyor',
+                tamamlanma_grup_id INTEGER DEFAULT NULL,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tamamlanma_gruplari (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sefer_id INTEGER NOT NULL,
+                grup_no TEXT NOT NULL,
+                notlar TEXT DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
 
-        # Eski veritabanı dosyaları için kontrollü kolon göçü
+        # Eski veritabanı dosyaları için kontrollü kolon göçü (records tablosu)
         mevcut_kolonlar = {row["name"] for row in conn.execute("PRAGMA table_info(records)").fetchall()}
         eksik_kolonlar = {
             "xml_group_no": "TEXT DEFAULT ''",
@@ -323,6 +384,85 @@ class PersistenceManager:
         for kolon, tanim in eksik_kolonlar.items():
             if kolon not in mevcut_kolonlar:
                 conn.execute(f"ALTER TABLE records ADD COLUMN {kolon} {tanim}")
+
+        # Migration: seferler tablosu boşsa records'tan geç
+        sefer_sayisi = conn.execute("SELECT COUNT(*) FROM seferler").fetchone()[0]
+        if sefer_sayisi == 0:
+            simdi = datetime.now().isoformat(timespec="seconds")
+            records_sayisi = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            if records_sayisi > 0:
+                cur = conn.execute(
+                    "INSERT INTO seferler (ad, durum, created_at, updated_at) VALUES (?, 'aktif', ?, ?)",
+                    ("Eski Kayıtlar", simdi, simdi),
+                )
+                sefer_id = cur.lastrowid
+                rows = conn.execute(
+                    """
+                    SELECT sira, belge_no, fatura_no, fatura_tarihi, deger, miktar, tanim,
+                           urun_grubu, balya_sayisi, brut_kg, navlun, sigorta, ilave_yurtdisi,
+                           excel_secili, belge_secili,
+                           belge_0101_ref, belge_0101_tarih, belge_0102_ref, belge_0102_tarih,
+                           belge_0979_ref, belge_0979_tarih, belge_0903_ref, belge_0903_tarih,
+                           belge_0877_ref, belge_0877_tarih, created_at, updated_at
+                    FROM records ORDER BY sira ASC, id ASC
+                    """
+                ).fetchall()
+                for row in rows:
+                    conn.execute(
+                        """
+                        INSERT INTO kalemler (
+                            sefer_id, sira, belge_no, fatura_no, fatura_tarihi, deger, miktar, tanim,
+                            urun_grubu, balya_sayisi, brut_kg, navlun, sigorta, ilave_yurtdisi,
+                            excel_secili, belge_secili,
+                            belge_0101_ref, belge_0101_tarih, belge_0102_ref, belge_0102_tarih,
+                            belge_0979_ref, belge_0979_tarih, belge_0903_ref, belge_0903_tarih,
+                            belge_0877_ref, belge_0877_tarih, durum, tamamlanma_grup_id,
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            sefer_id,
+                            row["sira"],
+                            row["belge_no"] or "",
+                            row["fatura_no"] or "",
+                            row["fatura_tarihi"] or "",
+                            row["deger"] or "",
+                            row["miktar"] or "",
+                            row["tanim"] or "",
+                            row["urun_grubu"] or "",
+                            row["balya_sayisi"] or "",
+                            row["brut_kg"] or "",
+                            row["navlun"] or "",
+                            row["sigorta"] or "",
+                            row["ilave_yurtdisi"] or "",
+                            row["excel_secili"] or 0,
+                            row["belge_secili"] or 0,
+                            row["belge_0101_ref"] or "",
+                            row["belge_0101_tarih"] or "",
+                            row["belge_0102_ref"] or "",
+                            row["belge_0102_tarih"] or "",
+                            row["belge_0979_ref"] or "",
+                            row["belge_0979_tarih"] or "",
+                            row["belge_0903_ref"] or "",
+                            row["belge_0903_tarih"] or "",
+                            row["belge_0877_ref"] or "",
+                            row["belge_0877_tarih"] or "",
+                            "bekliyor",
+                            None,
+                            row["created_at"] or simdi,
+                            simdi,
+                        ),
+                    )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO seferler (ad, durum, created_at, updated_at) VALUES (?, 'aktif', ?, ?)",
+                    ("Varsayılan Sefer", simdi, simdi),
+                )
+                sefer_id = cur.lastrowid
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_sefer_id', ?)",
+                (str(sefer_id),),
+            )
 
         conn.commit()
 
@@ -591,6 +731,356 @@ class PersistenceManager:
         self._bekleyen_uyari = ""
         return mesaj
 
+    # ------------------------------------------------------------------
+    # Sefer yönetimi
+    # ------------------------------------------------------------------
+    def create_sefer(self, ad: str) -> int:
+        simdi = datetime.now().isoformat(timespec="seconds")
+
+        def islem(conn):
+            cur = conn.execute(
+                "INSERT INTO seferler (ad, durum, created_at, updated_at) VALUES (?, 'aktif', ?, ?)",
+                (ad, simdi, simdi),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+        return self._db_isle(islem)
+
+    def list_seferler(self, tumu=False) -> list:
+        def islem(conn):
+            if tumu:
+                rows = conn.execute("SELECT * FROM seferler ORDER BY id ASC").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM seferler WHERE durum='aktif' ORDER BY id ASC"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        return self._db_isle(islem)
+
+    def archive_sefer(self, sefer_id: int):
+        simdi = datetime.now().isoformat(timespec="seconds")
+
+        def islem(conn):
+            conn.execute(
+                "UPDATE seferler SET durum='arsiv', updated_at=? WHERE id=?",
+                (simdi, sefer_id),
+            )
+            conn.commit()
+            return True
+
+        return self._db_isle(islem)
+
+    def get_active_sefer_id(self):
+        def islem(conn):
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key='active_sefer_id'"
+            ).fetchone()
+            if row and row["value"]:
+                try:
+                    return int(row["value"])
+                except (ValueError, TypeError):
+                    return None
+            return None
+
+        return self._db_isle(islem)
+
+    def set_active_sefer_id(self, sefer_id: int):
+        def islem(conn):
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_sefer_id', ?)",
+                (str(sefer_id),),
+            )
+            conn.commit()
+            return True
+
+        return self._db_isle(islem)
+
+    # ------------------------------------------------------------------
+    # Kalem yönetimi (yeni tablo)
+    # ------------------------------------------------------------------
+    def upsert_kalem(self, kalem: dict) -> int:
+        simdi = datetime.now().isoformat(timespec="seconds")
+        created_at = kalem.get("created_at") or simdi
+        sefer_id = kalem.get("seferId") or kalem.get("sefer_id")
+
+        def islem(conn):
+            if kalem.get("db_id"):
+                conn.execute(
+                    """
+                    UPDATE kalemler
+                    SET sefer_id=?, sira=?, belge_no=?, fatura_no=?, fatura_tarihi=?,
+                        deger=?, miktar=?, tanim=?, urun_grubu=?, balya_sayisi=?,
+                        brut_kg=?, navlun=?, sigorta=?, ilave_yurtdisi=?,
+                        excel_secili=?, belge_secili=?,
+                        belge_0101_ref=?, belge_0101_tarih=?, belge_0102_ref=?, belge_0102_tarih=?,
+                        belge_0979_ref=?, belge_0979_tarih=?, belge_0903_ref=?, belge_0903_tarih=?,
+                        belge_0877_ref=?, belge_0877_tarih=?,
+                        durum=?, tamamlanma_grup_id=?, created_at=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        sefer_id,
+                        kalem.get("sira", 0),
+                        kalem.get("belgeNo", ""),
+                        kalem.get("faturaNo", ""),
+                        kalem.get("faturaTarihi", ""),
+                        kalem.get("deger", ""),
+                        kalem.get("miktar", ""),
+                        kalem.get("tanim", ""),
+                        kalem.get("urunGrubu", ""),
+                        kalem.get("balyaSayisi", ""),
+                        kalem.get("brutKg", ""),
+                        kalem.get("navlun", ""),
+                        kalem.get("sigorta", ""),
+                        kalem.get("ilaveYurtdisi", ""),
+                        1 if kalem.get("excelSecili") else 0,
+                        1 if kalem.get("belgeSecili") else 0,
+                        kalem.get("belge0101Ref", ""),
+                        kalem.get("belge0101Tarih", ""),
+                        kalem.get("belge0102Ref", ""),
+                        kalem.get("belge0102Tarih", ""),
+                        kalem.get("belge0979Ref", ""),
+                        kalem.get("belge0979Tarih", ""),
+                        kalem.get("belge0903Ref", ""),
+                        kalem.get("belge0903Tarih", ""),
+                        kalem.get("belge0877Ref", ""),
+                        kalem.get("belge0877Tarih", ""),
+                        kalem.get("durum", "bekliyor"),
+                        kalem.get("tamamlanmaGrupId"),
+                        created_at,
+                        simdi,
+                        kalem["db_id"],
+                    ),
+                )
+                kayit_id = kalem["db_id"]
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO kalemler (
+                        sefer_id, sira, belge_no, fatura_no, fatura_tarihi, deger, miktar, tanim,
+                        urun_grubu, balya_sayisi, brut_kg, navlun, sigorta, ilave_yurtdisi,
+                        excel_secili, belge_secili,
+                        belge_0101_ref, belge_0101_tarih, belge_0102_ref, belge_0102_tarih,
+                        belge_0979_ref, belge_0979_tarih, belge_0903_ref, belge_0903_tarih,
+                        belge_0877_ref, belge_0877_tarih, durum, tamamlanma_grup_id,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        sefer_id,
+                        kalem.get("sira", 0),
+                        kalem.get("belgeNo", ""),
+                        kalem.get("faturaNo", ""),
+                        kalem.get("faturaTarihi", ""),
+                        kalem.get("deger", ""),
+                        kalem.get("miktar", ""),
+                        kalem.get("tanim", ""),
+                        kalem.get("urunGrubu", ""),
+                        kalem.get("balyaSayisi", ""),
+                        kalem.get("brutKg", ""),
+                        kalem.get("navlun", ""),
+                        kalem.get("sigorta", ""),
+                        kalem.get("ilaveYurtdisi", ""),
+                        1 if kalem.get("excelSecili") else 0,
+                        1 if kalem.get("belgeSecili") else 0,
+                        kalem.get("belge0101Ref", ""),
+                        kalem.get("belge0101Tarih", ""),
+                        kalem.get("belge0102Ref", ""),
+                        kalem.get("belge0102Tarih", ""),
+                        kalem.get("belge0979Ref", ""),
+                        kalem.get("belge0979Tarih", ""),
+                        kalem.get("belge0903Ref", ""),
+                        kalem.get("belge0903Tarih", ""),
+                        kalem.get("belge0877Ref", ""),
+                        kalem.get("belge0877Tarih", ""),
+                        kalem.get("durum", "bekliyor"),
+                        kalem.get("tamamlanmaGrupId"),
+                        created_at,
+                        simdi,
+                    ),
+                )
+                kayit_id = cur.lastrowid
+            conn.commit()
+            return kayit_id, created_at, simdi
+
+        kayit_id, created_at, updated_at = self._db_isle(islem)
+        kalem["db_id"] = kayit_id
+        kalem["created_at"] = created_at
+        kalem["updated_at"] = updated_at
+        return kayit_id
+
+    def delete_kalem(self, db_id: int) -> bool:
+        if not db_id:
+            return False
+
+        def islem(conn):
+            conn.execute("DELETE FROM kalemler WHERE id=?", (db_id,))
+            conn.commit()
+            return True
+
+        return self._db_isle(islem)
+
+    def save_kalemler(self, sefer_id: int, kalemler: list) -> bool:
+        if sefer_id is None:
+            return False
+        aktif_idler = []
+        for sira, kalem in enumerate(kalemler, start=1):
+            kalem["sira"] = sira
+            if not kalem.get("seferId"):
+                kalem["seferId"] = sefer_id
+            aktif_idler.append(self.upsert_kalem(kalem))
+
+        def islem(conn):
+            # Sadece bekliyor durumundaki kayıtları temizle; tamamlandi olanları koru
+            if aktif_idler:
+                yerler = ",".join("?" for _ in aktif_idler)
+                conn.execute(
+                    f"DELETE FROM kalemler WHERE sefer_id=? AND durum='bekliyor' AND id NOT IN ({yerler})",
+                    (sefer_id, *aktif_idler),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM kalemler WHERE sefer_id=? AND durum='bekliyor'",
+                    (sefer_id,),
+                )
+            conn.commit()
+            return True
+
+        return self._db_isle(islem)
+
+    def load_kalemler(self, sefer_id: int, show_completed=False, tamamlanma_grup_no=None) -> list:
+        def islem(conn):
+            if tamamlanma_grup_no:
+                rows = conn.execute(
+                    """
+                    SELECT k.*, tg.grup_no as tamamlanma_grup_no
+                    FROM kalemler k
+                    LEFT JOIN tamamlanma_gruplari tg ON k.tamamlanma_grup_id = tg.id
+                    WHERE k.sefer_id=? AND tg.grup_no=?
+                    ORDER BY k.sira ASC, k.id ASC
+                    """,
+                    (sefer_id, tamamlanma_grup_no),
+                ).fetchall()
+            elif show_completed:
+                rows = conn.execute(
+                    """
+                    SELECT k.*, tg.grup_no as tamamlanma_grup_no
+                    FROM kalemler k
+                    LEFT JOIN tamamlanma_gruplari tg ON k.tamamlanma_grup_id = tg.id
+                    WHERE k.sefer_id=?
+                    ORDER BY k.sira ASC, k.id ASC
+                    """,
+                    (sefer_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT k.*, tg.grup_no as tamamlanma_grup_no
+                    FROM kalemler k
+                    LEFT JOIN tamamlanma_gruplari tg ON k.tamamlanma_grup_id = tg.id
+                    WHERE k.sefer_id=? AND k.durum='bekliyor'
+                    ORDER BY k.sira ASC, k.id ASC
+                    """,
+                    (sefer_id,),
+                ).fetchall()
+
+            kalemler = []
+            for row in rows:
+                kalemler.append(
+                    {
+                        "db_id": row["id"],
+                        "seferId": row["sefer_id"],
+                        "sira": row["sira"],
+                        "belgeNo": row["belge_no"] or "",
+                        "faturaNo": row["fatura_no"] or "",
+                        "faturaTarihi": row["fatura_tarihi"] or "",
+                        "deger": row["deger"] or "",
+                        "miktar": row["miktar"] or "",
+                        "tanim": row["tanim"] or "",
+                        "urunGrubu": row["urun_grubu"] or "",
+                        "balyaSayisi": row["balya_sayisi"] or "",
+                        "xmlGroupNo": "",
+                        "excelGroupNo": "",
+                        "durum": row["durum"] or "bekliyor",
+                        "brutKg": row["brut_kg"] or "",
+                        "navlun": row["navlun"] or "",
+                        "sigorta": row["sigorta"] or "",
+                        "ilaveYurtdisi": row["ilave_yurtdisi"] or "",
+                        "excelSecili": 1 if row["excel_secili"] else 0,
+                        "belgeSecili": 1 if row["belge_secili"] else 0,
+                        "belge0101Ref": row["belge_0101_ref"] or "",
+                        "belge0101Tarih": row["belge_0101_tarih"] or "",
+                        "belge0102Ref": row["belge_0102_ref"] or "",
+                        "belge0102Tarih": row["belge_0102_tarih"] or "",
+                        "belge0979Ref": row["belge_0979_ref"] or "",
+                        "belge0979Tarih": row["belge_0979_tarih"] or "",
+                        "belge0903Ref": row["belge_0903_ref"] or "",
+                        "belge0903Tarih": row["belge_0903_tarih"] or "",
+                        "belge0877Ref": row["belge_0877_ref"] or "",
+                        "belge0877Tarih": row["belge_0877_tarih"] or "",
+                        "tamamlanmaGrupId": row["tamamlanma_grup_id"],
+                        "tamamlanmaGrupNo": row["tamamlanma_grup_no"] or "",
+                        "created_at": row["created_at"] or "",
+                        "updated_at": row["updated_at"] or "",
+                    }
+                )
+            return kalemler
+
+        return self._db_isle(islem)
+
+    def create_or_get_tamamlanma_grubu(self, sefer_id: int, grup_no: str) -> int:
+        simdi = datetime.now().isoformat(timespec="seconds")
+
+        def islem(conn):
+            row = conn.execute(
+                "SELECT id FROM tamamlanma_gruplari WHERE sefer_id=? AND grup_no=?",
+                (sefer_id, grup_no),
+            ).fetchone()
+            if row:
+                return row["id"]
+            cur = conn.execute(
+                "INSERT INTO tamamlanma_gruplari (sefer_id, grup_no, notlar, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+                (sefer_id, grup_no, simdi, simdi),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+        return self._db_isle(islem)
+
+    def complete_kalemler(self, kalem_ids: list, sefer_id: int, grup_no: str):
+        grup_id = self.create_or_get_tamamlanma_grubu(sefer_id, grup_no)
+        simdi = datetime.now().isoformat(timespec="seconds")
+
+        def islem(conn):
+            for kid in kalem_ids:
+                conn.execute(
+                    "UPDATE kalemler SET durum='tamamlandi', tamamlanma_grup_id=?, updated_at=? WHERE id=?",
+                    (grup_id, simdi, kid),
+                )
+            conn.commit()
+            return True
+
+        return self._db_isle(islem)
+
+    def undo_complete_kalemler(self, kalem_ids: list):
+        simdi = datetime.now().isoformat(timespec="seconds")
+
+        def islem(conn):
+            for kid in kalem_ids:
+                conn.execute(
+                    "UPDATE kalemler SET durum='bekliyor', tamamlanma_grup_id=NULL, updated_at=? WHERE id=?",
+                    (simdi, kid),
+                )
+            conn.commit()
+            return True
+
+        return self._db_isle(islem)
+
+    def list_kalemler_by_tamamlanma(self, sefer_id: int, grup_no: str) -> list:
+        return self.load_kalemler(sefer_id, show_completed=True, tamamlanma_grup_no=grup_no)
+
 
 class BasvuruXMLVeExcel:
     def __init__(self, root):
@@ -603,6 +1093,8 @@ class BasvuruXMLVeExcel:
         self.duzenlenen_index = None
         self._yukleme_modu = False
         self._kaydet_job = None
+        self.aktif_sefer_id = None
+        self.aktif_tamamlanma_filtre = None
         self.db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DB_DOSYA_ADI)
         self.persistence = PersistenceManager(self.db_path)
         self.persistence.init_db()
@@ -648,6 +1140,8 @@ class BasvuruXMLVeExcel:
             style="Aciklama.TLabel"
         ).pack(anchor="w", pady=(4, 10))
 
+        self._sefer_yonetim_bar(ana)
+
         self.notebook = ttk.Notebook(ana)
         self.notebook.pack(fill="both", expand=True)
 
@@ -686,6 +1180,39 @@ class BasvuruXMLVeExcel:
     # -----------------------------------------------------
     # XML SEKMESİ
     # -----------------------------------------------------
+    def _sefer_yonetim_bar(self, parent):
+        bar = ttk.LabelFrame(parent, text="Sefer Yönetimi", padding=6)
+        bar.pack(fill="x", pady=(0, 8))
+
+        sol = ttk.Frame(bar)
+        sol.pack(side="left", fill="x", expand=True)
+
+        ttk.Label(sol, text="Aktif Sefer:").pack(side="left")
+        self.sefer_combobox_var = tk.StringVar()
+        self.sefer_combobox = ttk.Combobox(sol, textvariable=self.sefer_combobox_var, state="readonly", width=30)
+        self.sefer_combobox.pack(side="left", padx=(4, 8))
+        self.sefer_combobox.bind("<<ComboboxSelected>>", self._sefer_secildi)
+
+        ttk.Button(sol, text="Yeni Sefer Başlat", command=self.yeni_sefer_baslat).pack(side="left", padx=(0, 4))
+        ttk.Button(sol, text="Seferi Arşivle", command=self.seferi_arsivle).pack(side="left", padx=(0, 16))
+
+        self.tamamlananlar_goster_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            sol,
+            text="Tamamlananları Göster",
+            variable=self.tamamlananlar_goster_var,
+            command=self._filtre_degisti,
+        ).pack(side="left", padx=(0, 12))
+
+        ttk.Label(sol, text="Tamamlanma No:").pack(side="left")
+        self.tamamlanma_filtre_var = tk.StringVar()
+        ttk.Entry(sol, textvariable=self.tamamlanma_filtre_var, width=8).pack(side="left", padx=(4, 4))
+        ttk.Button(sol, text="Göster", command=self._tamamlanma_no_filtrele).pack(side="left", padx=(0, 4))
+        ttk.Button(sol, text="Temizle", command=self._filtre_temizle).pack(side="left")
+
+        self.aktif_sefer_bilgi_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.aktif_sefer_bilgi_var, style="Ozet.TLabel").pack(side="right", padx=(8, 0))
+
     def _xml_sekmesini_olustur(self, parent):
         self._ust_aksiyon_bar(parent)
         self._genel_bilgiler_bolumu(parent)
@@ -898,7 +1425,7 @@ class BasvuruXMLVeExcel:
         lf = ttk.LabelFrame(parent, text="Eklenen Kalemler", padding=10)
         lf.pack(fill="both", expand=True)
 
-        kolonlar = ("no", "belgeNo", "faturaTarihi", "faturaNo", "deger", "miktar", "urunGrubu", "balya", "tanim")
+        kolonlar = ("no", "belgeNo", "faturaTarihi", "faturaNo", "deger", "miktar", "urunGrubu", "balya", "tanim", "durum")
         self.tree = ttk.Treeview(lf, columns=kolonlar, show="headings", height=15)
 
         basliklar = {
@@ -911,6 +1438,7 @@ class BasvuruXMLVeExcel:
             "urunGrubu": "Ürün Grubu",
             "balya": "Balya Sayısı",
             "tanim": "Tanım",
+            "durum": "Durum",
         }
         genislikler = {
             "no": 50,
@@ -921,16 +1449,18 @@ class BasvuruXMLVeExcel:
             "miktar": 110,
             "urunGrubu": 170,
             "balya": 90,
-            "tanim": 260,
+            "tanim": 220,
+            "durum": 100,
         }
 
         for col in kolonlar:
             self.tree.heading(col, text=basliklar[col])
-            anchor = "center" if col in ("no", "faturaTarihi", "balya") else "w"
+            anchor = "center" if col in ("no", "faturaTarihi", "balya", "durum") else "w"
             if col in ("deger", "miktar"):
                 anchor = "e"
             self.tree.column(col, width=genislikler[col], anchor=anchor)
 
+        self.tree.tag_configure("tamamlandi", foreground="#888888")
         self.tree.bind("<Double-1>", lambda event: self.seciliyi_forma_yukle())
 
         ysb = ttk.Scrollbar(lf, orient="vertical", command=self.tree.yview)
@@ -945,6 +1475,11 @@ class BasvuruXMLVeExcel:
         ttk.Button(buton, text="Seçiliyi Kopyala", command=self.secili_kalemi_kopyala).pack(side="left", padx=(8, 0))
         ttk.Button(buton, text="Seçiliyi Sil", command=self.secili_kalemi_sil).pack(side="left", padx=(8, 0))
         ttk.Button(buton, text="Tümünü Temizle", command=self.tum_kalemleri_temizle).pack(side="left", padx=(8, 0))
+
+        ttk.Separator(buton, orient="vertical").pack(side="left", fill="y", padx=(8, 8))
+        ttk.Button(buton, text="Seçilileri Tamamlandı Yap", command=self.secilileri_tamamlandi_yap).pack(side="left", padx=(0, 4))
+        ttk.Button(buton, text="Tamamlandıyı Geri Al", command=self.tamamlandiyi_geri_al).pack(side="left")
+
         ttk.Button(buton, text="XML Önizleme", command=self.xml_onizleme).pack(side="right")
         ttk.Button(buton, text="XML Kaydet", command=self.xml_kaydet).pack(side="right", padx=(0, 8))
 
@@ -1331,33 +1866,19 @@ class BasvuruXMLVeExcel:
 
     def save_records(self):
         try:
-            self.persistence.save_records(self.kalemler)
+            self.persistence.save_kalemler(self.aktif_sefer_id, self.kalemler)
             self._veritabani_uyarisini_goster()
         except Exception as exc:
             messagebox.showerror("Kayıt Hatası", f"Kalemler kaydedilemedi:\n{exc}")
             raise
 
     def load_records(self):
-        try:
-            kalemler = self.persistence.load_records()
-        except Exception as exc:
-            messagebox.showerror("Yükleme Hatası", f"Kalemler yüklenemedi:\n{exc}")
-            return []
-
-        self.kalemler = kalemler
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        for kalem in self.kalemler:
-            self._kalem_treeye_ekle(kalem)
-
-        self._ozeti_guncelle()
-        self.excel_onizleme_guncelle()
-        self.belgeler_listesini_guncelle()
-        return kalemler
+        self._kalemler_yukle()
+        return self.kalemler
 
     def upsert_record(self, kalem):
         try:
-            kayit_id = self.persistence.upsert_record(kalem)
+            kayit_id = self.persistence.upsert_kalem(kalem)
             self._veritabani_uyarisini_goster()
             return kayit_id
         except Exception as exc:
@@ -1366,7 +1887,7 @@ class BasvuruXMLVeExcel:
 
     def delete_record(self, db_id):
         try:
-            sonuc = self.persistence.delete_record(db_id)
+            sonuc = self.persistence.delete_kalem(db_id)
             self._veritabani_uyarisini_goster()
             return sonuc
         except Exception as exc:
@@ -1390,9 +1911,30 @@ class BasvuruXMLVeExcel:
 
     def load_all_state(self):
         self.load_settings()
-        kalemler = self.load_records()
-        if kalemler:
-            self._kayit_bilgisi_yaz(f"{len(kalemler)} kayıt yüklendi")
+
+        # Sefer durumunu başlat
+        try:
+            aktif_id = self.persistence.get_active_sefer_id()
+            if aktif_id:
+                self.aktif_sefer_id = aktif_id
+            else:
+                seferler = self.persistence.list_seferler(tumu=True)
+                if seferler:
+                    self.aktif_sefer_id = seferler[0]["id"]
+                    self.persistence.set_active_sefer_id(self.aktif_sefer_id)
+                else:
+                    sefer_id = self.persistence.create_sefer("Varsayılan Sefer")
+                    self.aktif_sefer_id = sefer_id
+                    self.persistence.set_active_sefer_id(sefer_id)
+        except Exception as exc:
+            messagebox.showerror("Sefer Hatası", f"Sefer durumu yüklenemedi:\n{exc}")
+
+        self._sefer_combobox_guncelle()
+        self._aktif_sefer_bilgisini_guncelle()
+        self._kalemler_yukle()
+
+        if self.kalemler:
+            self._kayit_bilgisi_yaz(f"{len(self.kalemler)} kayıt yüklendi")
         else:
             self.durum_var.set("Hazır. Veriler otomatik kaydediliyor.")
 
@@ -1811,6 +2353,11 @@ class BasvuruXMLVeExcel:
         self.ozet_miktar_var.set(f"Toplam Miktar: {toplam_miktar:,.2f}")
 
     def _kalem_treeye_ekle(self, kalem):
+        durum_goster = ""
+        if kalem.get("durum") == "tamamlandi":
+            grup_no = kalem.get("tamamlanmaGrupNo", "")
+            durum_goster = f"✓ {grup_no}" if grup_no else "✓"
+        tag = "tamamlandi" if kalem.get("durum") == "tamamlandi" else ""
         self.tree.insert(
             "",
             "end",
@@ -1824,7 +2371,9 @@ class BasvuruXMLVeExcel:
                 kalem["urunGrubu"],
                 kalem["balyaSayisi"],
                 kalem["tanim"],
-            )
+                durum_goster,
+            ),
+            tags=(tag,) if tag else (),
         )
 
     def _kalem_dict_olustur(
@@ -1841,7 +2390,7 @@ class BasvuruXMLVeExcel:
         db_id=None,
         xml_group_no="",
         excel_group_no="",
-        durum="Hazır",
+        durum="bekliyor",
         brut_kg="",
         navlun="",
         sigorta="",
@@ -1860,9 +2409,13 @@ class BasvuruXMLVeExcel:
         belge_0877_tarih="",
         created_at="",
         updated_at="",
+        sefer_id=None,
+        tamamlanma_grup_id=None,
+        tamamlanma_grup_no="",
     ):
         return {
             "db_id": db_id,
+            "seferId": sefer_id,
             "sira": sira,
             "belgeNo": belge_no.strip(),
             "faturaTarihi": fatura_tarihi.strip(),
@@ -1874,7 +2427,7 @@ class BasvuruXMLVeExcel:
             "balyaSayisi": self.sayi_duzelt(balya_sayisi),
             "xmlGroupNo": xml_group_no or "",
             "excelGroupNo": excel_group_no or "",
-            "durum": durum or "Hazır",
+            "durum": durum or "bekliyor",
             "brutKg": self.sayi_duzelt(brut_kg) if brut_kg else "",
             "navlun": self.sayi_duzelt(navlun) if navlun else "",
             "sigorta": self.sayi_duzelt(sigorta) if sigorta else "",
@@ -1891,6 +2444,8 @@ class BasvuruXMLVeExcel:
             "belge0903Tarih": belge_0903_tarih.strip(),
             "belge0877Ref": belge_0877_ref.strip(),
             "belge0877Tarih": belge_0877_tarih.strip(),
+            "tamamlanmaGrupId": tamamlanma_grup_id,
+            "tamamlanmaGrupNo": tamamlanma_grup_no or "",
             "created_at": created_at or "",
             "updated_at": updated_at or "",
         }
@@ -1980,7 +2535,9 @@ class BasvuruXMLVeExcel:
 
         if not duzenleme_modu:
             kalem = self._kalem_dict_olustur(
-                belge_no, fatura_tarihi, fatura_no, deger, miktar, tanim, urun_grubu, balya_sayisi, len(self.kalemler) + 1
+                belge_no, fatura_tarihi, fatura_no, deger, miktar, tanim, urun_grubu, balya_sayisi,
+                len(self.kalemler) + 1,
+                sefer_id=self.aktif_sefer_id,
             )
             self.upsert_record(kalem)
             self.kalemler.append(kalem)
@@ -2002,7 +2559,7 @@ class BasvuruXMLVeExcel:
                 db_id=eski_kalem.get("db_id"),
                 xml_group_no=eski_kalem.get("xmlGroupNo", ""),
                 excel_group_no=eski_kalem.get("excelGroupNo", ""),
-                durum=eski_kalem.get("durum", "Hazır"),
+                durum=eski_kalem.get("durum", "bekliyor"),
                 brut_kg=eski_kalem.get("brutKg", ""),
                 navlun=eski_kalem.get("navlun", ""),
                 sigorta=eski_kalem.get("sigorta", ""),
@@ -2021,6 +2578,9 @@ class BasvuruXMLVeExcel:
                 belge_0877_tarih=eski_kalem.get("belge0877Tarih", ""),
                 created_at=eski_kalem.get("created_at", ""),
                 updated_at=eski_kalem.get("updated_at", ""),
+                sefer_id=eski_kalem.get("seferId") or self.aktif_sefer_id,
+                tamamlanma_grup_id=eski_kalem.get("tamamlanmaGrupId"),
+                tamamlanma_grup_no=eski_kalem.get("tamamlanmaGrupNo", ""),
             )
             self.upsert_record(kalem)
             self.kalemler[self.duzenlenen_index] = kalem
@@ -2093,6 +2653,10 @@ class BasvuruXMLVeExcel:
         yeni["excelSecili"] = 0
         yeni["belgeSecili"] = 0
         yeni["sira"] = len(self.kalemler) + 1
+        yeni["seferId"] = self.aktif_sefer_id
+        yeni["durum"] = "bekliyor"
+        yeni["tamamlanmaGrupId"] = None
+        yeni["tamamlanmaGrupNo"] = ""
         self.upsert_record(yeni)
         self.kalemler.append(yeni)
         self._kalem_treeye_ekle(yeni)
@@ -2502,6 +3066,162 @@ class BasvuruXMLVeExcel:
             messagebox.showinfo("Başarılı", f"Excel oluşturuldu.\n\n{yol}")
         except Exception as e:
             messagebox.showerror("Hata", f"Excel kaydedilirken hata oluştu:\n{e}")
+
+    # -----------------------------------------------------
+    # Sefer yönetimi metodları
+    # -----------------------------------------------------
+    def _sefer_combobox_guncelle(self):
+        seferler = self.persistence.list_seferler(tumu=True)
+        self._sefer_listesi = seferler
+        etiketler = [
+            f"{s['ad']} (#{s['id']})" + (" [arşiv]" if s["durum"] == "arsiv" else "")
+            for s in seferler
+        ]
+        self.sefer_combobox["values"] = etiketler
+        if self.aktif_sefer_id:
+            for i, s in enumerate(seferler):
+                if s["id"] == self.aktif_sefer_id:
+                    self.sefer_combobox.current(i)
+                    break
+
+    def _sefer_secildi(self, event=None):
+        secim_index = self.sefer_combobox.current()
+        if secim_index < 0 or not hasattr(self, "_sefer_listesi"):
+            return
+        sefer = self._sefer_listesi[secim_index]
+        self.aktif_sefer_id = sefer["id"]
+        self.persistence.set_active_sefer_id(self.aktif_sefer_id)
+        self._kalemler_yukle()
+        self._aktif_sefer_bilgisini_guncelle()
+
+    def _aktif_sefer_bilgisini_guncelle(self):
+        if not self.aktif_sefer_id or not hasattr(self, "_sefer_listesi"):
+            self.aktif_sefer_bilgi_var.set("")
+            return
+        for s in self._sefer_listesi:
+            if s["id"] == self.aktif_sefer_id:
+                self.aktif_sefer_bilgi_var.set(f"Aktif: {s['ad']} (#{s['id']})")
+                return
+
+    def yeni_sefer_baslat(self):
+        ad = simpledialog.askstring("Yeni Sefer", "Sefer adı:", parent=self.root)
+        if not ad or not ad.strip():
+            return
+        sefer_id = self.persistence.create_sefer(ad.strip())
+        self.aktif_sefer_id = sefer_id
+        self.persistence.set_active_sefer_id(sefer_id)
+        self.kalemler.clear()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self._ozeti_guncelle()
+        self.excel_onizleme_guncelle()
+        self.belgeler_listesini_guncelle()
+        self.kalem_alanlarini_temizle()
+        self._sefer_combobox_guncelle()
+        self._aktif_sefer_bilgisini_guncelle()
+        self._kayit_bilgisi_yaz(f"Yeni sefer başlatıldı: {ad.strip()}")
+
+    def seferi_arsivle(self):
+        if not self.aktif_sefer_id:
+            messagebox.showwarning("Sefer Yok", "Aktif sefer bulunamadı.")
+            return
+        if not messagebox.askyesno("Arşivle", "Aktif sefer arşivlensin mi? Veriler kaybolmaz."):
+            return
+        self.persistence.archive_sefer(self.aktif_sefer_id)
+        self._sefer_combobox_guncelle()
+        self._kayit_bilgisi_yaz("Sefer arşivlendi.")
+
+    def _filtre_degisti(self):
+        self.aktif_tamamlanma_filtre = None
+        self.tamamlanma_filtre_var.set("")
+        self._kalemler_yukle()
+
+    def _tamamlanma_no_filtrele(self):
+        grup_no = self.tamamlanma_filtre_var.get().strip()
+        if not grup_no:
+            messagebox.showwarning("Eksik Bilgi", "Tamamlanma No giriniz.")
+            return
+        self.aktif_tamamlanma_filtre = grup_no
+        self.tamamlananlar_goster_var.set(True)
+        self._kalemler_yukle()
+
+    def _filtre_temizle(self):
+        self.aktif_tamamlanma_filtre = None
+        self.tamamlanma_filtre_var.set("")
+        self.tamamlananlar_goster_var.set(False)
+        self._kalemler_yukle()
+
+    def _kalemler_yukle(self):
+        if not self.aktif_sefer_id:
+            return
+        show_completed = self.tamamlananlar_goster_var.get()
+        try:
+            kalemler = self.persistence.load_kalemler(
+                self.aktif_sefer_id,
+                show_completed=show_completed,
+                tamamlanma_grup_no=self.aktif_tamamlanma_filtre,
+            )
+        except Exception as exc:
+            messagebox.showerror("Yükleme Hatası", f"Kalemler yüklenemedi:\n{exc}")
+            return
+        self.kalemler = kalemler
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for kalem in self.kalemler:
+            self._kalem_treeye_ekle(kalem)
+        self._ozeti_guncelle()
+        self.excel_onizleme_guncelle()
+        self.belgeler_listesini_guncelle()
+
+    def secilileri_tamamlandi_yap(self):
+        secim = self.tree.selection()
+        if not secim:
+            messagebox.showwarning("Seçim Yok", "Önce listeden en az bir kalem seç.")
+            return
+        grup_no = simpledialog.askstring(
+            "Tamamlanma No", "Tamamlanma numarası girin (örn: 55):", parent=self.root
+        )
+        if not grup_no or not grup_no.strip():
+            return
+        grup_no = grup_no.strip()
+        indeksler = [self.tree.index(item) for item in secim]
+        kalem_ids = [
+            self.kalemler[i]["db_id"]
+            for i in indeksler
+            if 0 <= i < len(self.kalemler) and self.kalemler[i].get("db_id")
+        ]
+        if not kalem_ids:
+            return
+        try:
+            self.persistence.complete_kalemler(kalem_ids, self.aktif_sefer_id, grup_no)
+        except Exception as exc:
+            messagebox.showerror("Hata", f"Tamamlandı yapılamadı:\n{exc}")
+            return
+        self._kalemler_yukle()
+        self._kayit_bilgisi_yaz(f"{len(kalem_ids)} kalem tamamlandı (Grup: {grup_no})")
+
+    def tamamlandiyi_geri_al(self):
+        secim = self.tree.selection()
+        if not secim:
+            messagebox.showwarning("Seçim Yok", "Önce listeden en az bir kalem seç.")
+            return
+        indeksler = [self.tree.index(item) for item in secim]
+        kalem_ids = []
+        for i in indeksler:
+            if 0 <= i < len(self.kalemler):
+                k = self.kalemler[i]
+                if k.get("db_id") and k.get("durum") == "tamamlandi":
+                    kalem_ids.append(k["db_id"])
+        if not kalem_ids:
+            messagebox.showinfo("Bilgi", "Seçili kalemler arasında tamamlanmış kalem bulunamadı.")
+            return
+        try:
+            self.persistence.undo_complete_kalemler(kalem_ids)
+        except Exception as exc:
+            messagebox.showerror("Hata", f"Geri alma başarısız:\n{exc}")
+            return
+        self._kalemler_yukle()
+        self._kayit_bilgisi_yaz(f"{len(kalem_ids)} kalem tekrar bekliyor durumuna alındı")
 
 
 def main():
