@@ -935,11 +935,13 @@ class PersistenceManager:
         def islem(conn):
             # Sadece bekliyor durumundaki kayıtları temizle; tamamlandi olanları koru
             if aktif_idler:
-                yerler = ",".join("?" for _ in aktif_idler)
-                conn.execute(
-                    f"DELETE FROM kalemler WHERE sefer_id=? AND durum='bekliyor' AND id NOT IN ({yerler})",
-                    (sefer_id, *aktif_idler),
+                guvenceli_idler = [int(x) for x in aktif_idler]
+                placeholders = ",".join(["?"] * len(guvenceli_idler))
+                sql = (
+                    "DELETE FROM kalemler WHERE sefer_id=? AND durum='bekliyor'"
+                    " AND id NOT IN (" + placeholders + ")"
                 )
+                conn.execute(sql, (sefer_id, *guvenceli_idler))
             else:
                 conn.execute(
                     "DELETE FROM kalemler WHERE sefer_id=? AND durum='bekliyor'",
